@@ -1,0 +1,84 @@
+#!/bin/sh
+
+IPV4=192.0.2.1
+IPV6=2001:db8:ffff:a000:fdc0::3b5
+
+add () {
+	[ "$IPV4" ] && [ -z "$(ip addr show dev lo scope global | grep " inet ${IPV4}/32 ")" ] \
+			&& ip addr add ${IPV4}/32 dev lo
+	[ "$IPV6" ] && [ -z "$(ip addr show dev lo scope global | grep " inet6 ${IPV6}/128 ")" ] \
+			&& ip addr add ${IPV6}/128 dev lo
+
+	return 0
+}
+
+del () {
+	[ "$IPV4" ] && [ -n "$(ip addr show dev lo scope global | grep " inet ${IPV4}/32 ")" ] \
+			&& ip addr del ${IPV4}/32 dev lo
+	[ "$IPV6" ] && [ -n "$(ip addr show dev lo scope global | grep " inet6 ${IPV6}/128 ")" ] \
+			&& ip addr del ${IPV6}/128 dev lo
+
+	return 0
+}
+
+stop () {
+	del
+
+	kill -STOP $(pgrep -f $SELF)
+}
+
+quit () {
+	del
+
+	exit 0
+}
+
+check () {
+	# complexity to try to avoid race conditions, amendments welcomed (I prefer not to use TCP)
+	MSG="<135>$(date +"%b %_d %R:%S") 127.0.0.1 $SELF: test"
+
+	# we only test the IPv4 side (local0|debug = 16*8 + 7)
+	(nc -u --recv-only -t 1 -w 2 -l -p 5515 -s 127.0.0.1 127.0.0.1 | grep -q "$MSG") &
+	JOB=$!
+
+	LOOP=3
+	until grep -q ': 0100007F:158B 00000000:0000 ' /proc/net/udp; do
+		[ $LOOP -eq 0 ] && { kill -KILL $JOB; del; return; }
+
+		LOOP=$((LOOP-1))
+		sleep 1
+	done
+
+	echo -n "$MSG" | nc -u --send-only -s 127.0.0.1 127.0.0.1 5514
+
+	wait $JOB
+
+	[ $? -eq 0 ] && add || del
+}
+
+go () {
+	trap quit TERM
+	trap stop TSTP
+
+	while true; do
+		check
+
+		sleep 1
+	done
+}
+
+SELF=$(basename "$0")
+PROCS=$(pgrep -f "^/bin/sh $0\$")
+RC=$?
+if [ $RC -gt 0 ]; then
+	echo "unexpected pgrep results (ret=$RC)" > /dev/stderr
+	exit 70
+fi
+if [ "$PROCS" != "$$" ]; then
+	echo "'$SELF' is already running" > /dev/stderr
+	exit 69
+fi
+
+0<&- 1<&- 2<&- go &
+
+exit 0

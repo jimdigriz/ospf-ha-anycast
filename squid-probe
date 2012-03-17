@@ -1,0 +1,69 @@
+#!/bin/sh
+
+# proxy, proxy0, proxy1
+IPV4="192.0.2.1 192.0.2.2 192.0.2.3"
+IPV6="2001:db8:ffff:a000:fce9:4633:2f26:4a5b 2001:db8:ffff:a000:3b30:4100:d401:2a97 2001:db8:ffff:a000:a0d3:5619:9943:8390"
+
+add () {
+	[ "$IPV4" ] && [ -z "$(ip addr show dev lo scope global | grep " inet ")" ] \
+			&& echo -n $IPV4 | xargs -d' ' -I{} ip addr add {}/32 dev lo
+	[ "$IPV6" ] && [ -z "$(ip addr show dev lo scope global | grep " inet6 ")" ] \
+			&& echo -n $IPV6 | xargs -d' ' -I{} ip addr add {}/128 dev lo
+
+	return 0
+}
+
+del () {
+	[ "$IPV4" ] && [ -n "$(ip addr show dev lo scope global | grep " inet ")" ] \
+			&& echo -n $IPV4 | xargs -d' ' -I{} ip addr del {}/32 dev lo
+	[ "$IPV6" ] && [ -n "$(ip addr show dev lo scope global | grep " inet6 ")" ] \
+			&& echo -n $IPV6 | xargs -d' ' -I{} ip addr del {}/128 dev lo
+
+	return 0
+}
+
+stop () {
+	del
+
+	kill -STOP $(pgrep -f $SELF)
+}
+
+quit () {
+	del
+
+	exit 0
+}
+
+check () {
+	# we only test the IPv4 side
+	wget -q --no-proxy --timeout=2 --spider http://localhost:3128/squid-internal-static/icons/anthony-unknown.gif
+
+	[ $? -eq 0 ] && add || del
+}
+
+go () {
+	trap quit TERM
+	trap stop TSTP
+
+	while true; do
+		check
+
+		sleep 1
+	done
+}
+
+SELF=$(basename "$0")
+PROCS=$(pgrep -f "^/bin/sh $0\$")
+RC=$?
+if [ $RC -gt 0 ]; then
+	echo "unexpected pgrep results (ret=$RC)" > /dev/stderr
+	exit 70
+fi
+if [ "$PROCS" != "$$" ]; then
+	echo "'$SELF' is already running" > /dev/stderr
+	exit 69
+fi
+
+0<&- 1<&- 2<&- go &
+
+exit 0

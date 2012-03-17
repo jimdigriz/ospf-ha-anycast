@@ -1,0 +1,74 @@
+#!/bin/sh
+
+add () {
+	[ -z "$(ip route show $ADDR dev $DEV scope link)" ] \
+			&& ip route add $ADDR dev $DEV
+
+	return 0
+}
+
+del () {
+	[ -n "$(ip route show $ADDR dev $DEV scope link)" ] \
+			&& ip route del $ADDR dev $DEV
+
+	return 0
+}
+
+stop () {
+	del
+
+	kill -STOP $PROCS
+}
+
+quit () {
+	del
+
+	exit 0
+}
+
+check () {
+	WORKING=1
+
+        for PORT in $@; do
+		nc -z -w 1 $ADDR $PORT 2> /dev/null
+
+		[ $? -ne 0 ] && { WORKING=0; break; }
+	done
+
+	[ $WORKING -eq 1 ] && add || del
+}
+
+go () {
+	trap quit TERM
+	trap stop TSTP
+
+	while true; do
+		check $@
+
+		sleep 10
+	done
+}
+
+SELF=$(basename "$0")
+PROCS=$(pgrep -f "^/bin/sh $0 $*\$")
+RC=$?
+if [ $RC -gt 0 ]; then
+	echo "unexpected pgrep results (ret=$RC)" >&2
+	exit 70
+fi
+if [ "$PROCS" != "$$" ]; then
+	echo "'$SELF $*' is already running" >&2
+	exit 69
+fi
+
+if [ ! "$3" ]; then
+	echo -e "Usage:\n\t$SELF dev address tcp-port0 [tcp-port1 [...]]" >&2
+	exit 64
+fi
+DEV=$1
+ADDR=$2
+shift 2
+
+0<&- 1<&- 2<&- go $@ &
+
+exit 0
